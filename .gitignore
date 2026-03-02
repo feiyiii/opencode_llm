@@ -28,3 +28,7 @@ opencode-dev
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Python cache
+__pycache__/
+*.pyc
