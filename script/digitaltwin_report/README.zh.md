@@ -5,6 +5,7 @@
 - 生成中文/英文 HTML 报告（默认中文）
 - 输出预警原因与工艺诊断
 - 调用 DeepSeek 生成专业分析段落
+- 支持基础登录鉴权（默认 `admin / 123`）
 
 ## 目录
 - `report_server.py` 报告服务
@@ -31,6 +32,10 @@ set REPORT_LLM_BASE_URL=https://api.deepseek.com/v1
 set REPORT_LLM_API_KEY=your_deepseek_key
 set REPORT_LLM_MODEL=deepseek-chat
 set REPORT_PORT=8003
+
+set REPORT_AUTH_ENABLED=1
+set REPORT_AUTH_USER=admin
+set REPORT_AUTH_PASSWORD=123
 ```
 
 3. 启动
@@ -54,7 +59,28 @@ start_report_server.bat
 - 服务每次调用 LLM 时会自动读取：
 - `REPORT_REQUIREMENTS.*.md`
 - `REPORT_CONTEXT.*.md`
+- `Data_structure_enriched.docx` / `Data_structure.docx` / `docs/references/data_structure.md`（存在即自动加载）
 - 因此你后续只改这两个文件，就能更新报告写作要求，不需要改 Python 代码。
+
+## EC2 最小部署（推荐）
+仅复制以下目录即可，不需要整个 opencode：
+- `script/digitaltwin_report`
+
+Linux 启动示例：
+```bash
+cd script/digitaltwin_report
+pip install mysql-connector-python
+
+export REPORT_HOST=0.0.0.0
+export REPORT_PORT=8003
+export REPORT_AUTH_ENABLED=1
+export REPORT_AUTH_USER=admin
+export REPORT_AUTH_PASSWORD=123
+export REPORT_LLM_ENABLED=1
+export REPORT_DEEPSEEK_API_KEY=your_key
+
+python report_server.py
+```
 
 ## 安全建议
 - 不要把 API Key 写入代码或提交到仓库。

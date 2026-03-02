@@ -2,15 +2,19 @@ import html
 import json
 import math
 import os
+import base64
+import hmac
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
+import zipfile
 from typing import Any
 from urllib import request as urlrequest
 from urllib.parse import parse_qs, urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
+DT_ROOT = BASE_DIR.parents[3] if len(BASE_DIR.parents) > 3 else BASE_DIR
 
 
 def fmt(v: Any, digits: int = 3) -> str:
@@ -482,6 +486,7 @@ def llm_analysis(report: dict[str, Any], lang: str, provider: str) -> str:
     model = profile["model"]
     rules = load_text(lang, "REPORT_REQUIREMENTS")
     context = load_text(lang, "REPORT_CONTEXT")
+    extra_context = load_extra_context()
     prompt = (
         "你是污水处理厂数字孪生运行专家。请严格按规范输出报告分析，必须包含“AI加碳策略专项分析”小节。重点解释三表给出的策略建议和当前状态，不要展开讲三表生成流程。请结合 NOX 目标差距给出可执行建议。"
         if lang == "zh"
@@ -500,6 +505,8 @@ def llm_analysis(report: dict[str, Any], lang: str, provider: str) -> str:
                     + rules
                     + "\n\n[PROCESS_CONTEXT]\n"
                     + context
+                    + "\n\n[EXTRA_CONTEXT]\n"
+                    + extra_context
                     + "\n\n[DATA_JSON]\n"
                     + json.dumps(report, ensure_ascii=False)
                 ),
@@ -529,6 +536,49 @@ def load_text(lang: str, stem: str) -> str:
     if p.exists():
         return p.read_text(encoding="utf-8")
     return ""
+
+
+def read_docx_text(path: Path) -> str:
+    try:
+        with zipfile.ZipFile(path) as zf:
+            with zf.open("word/document.xml") as f:
+                xml = f.read().decode("utf-8", errors="ignore")
+        text = re.sub(r"<[^>]+>", " ", xml)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+    except Exception:
+        return ""
+
+
+def read_any_text(path: Path, max_chars: int = 12000) -> str:
+    if not path.exists():
+        return ""
+    if path.suffix.lower() == ".docx":
+        return read_docx_text(path)[:max_chars]
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")[:max_chars]
+    except Exception:
+        return ""
+
+
+def load_extra_context() -> str:
+    configured = os.environ.get("REPORT_EXTRA_CONTEXT_PATHS", "").strip()
+    if configured:
+        paths = [Path(x.strip()) for x in configured.split(";") if x.strip()]
+    else:
+        paths = [
+            BASE_DIR / "README.zh.md",
+            BASE_DIR.parent.parent / "README.zh.md",
+            DT_ROOT / "Data_structure_enriched.docx",
+            DT_ROOT / "Data_structure.docx",
+            DT_ROOT / "docs" / "references" / "data_structure.md",
+        ]
+    blocks: list[str] = []
+    for p in paths:
+        txt = read_any_text(p)
+        if txt:
+            blocks.append(f"[{p.name}]\n{txt}")
+    return "\n\n".join(blocks)
 
 
 def render(report: dict[str, Any], lang: str) -> str:
@@ -604,6 +654,27 @@ h2{{margin:0 0 8px 0;color:#1453c2}} .muted{{color:#475467;font-size:14px}} ul{{
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _auth_enabled(self) -> bool:
+        return os.environ.get("REPORT_AUTH_ENABLED", "1") == "1"
+
+    def _check_basic_auth(self) -> bool:
+        if not self._auth_enabled():
+            return True
+        user = os.environ.get("REPORT_AUTH_USER", "admin")
+        pwd = os.environ.get("REPORT_AUTH_PASSWORD", "123")
+        expected = "Basic " + base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
+        got = self.headers.get("Authorization", "")
+        return hmac.compare_digest(got, expected)
+
+    def _need_auth(self) -> None:
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="DigitalTwin Report"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        body = "Unauthorized".encode("utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _json(self, payload: dict[str, Any], code: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(code)
@@ -622,6 +693,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         u = urlparse(self.path)
+        if u.path != "/health" and not self._check_basic_auth():
+            self._need_auth()
+            return
         q = parse_qs(u.query)
         report_date = q.get("date", [date.today().isoformat()])[0]
         lang = q.get("lang", ["zh"])[0]
