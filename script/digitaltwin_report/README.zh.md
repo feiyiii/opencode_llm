@@ -1,7 +1,8 @@
 # DigitalTwin 报告服务（Opencode 内）
 
 该服务用于生产版测试：
-- 读取 MySQL（`sim_recorder` / `sim_predict` / `carbon_opt_*`）
+- 默认读取 S3 latest 数据包（`digitaltwin_exports/latest/manifest.json`）
+- 可选读取 MySQL（`REPORT_DATA_SOURCE=mysql`）
 - 生成中文/英文 HTML 报告（默认中文）
 - 输出预警原因与工艺诊断
 - 调用 DeepSeek 生成专业分析段落
@@ -16,7 +17,7 @@
 ## Windows 运行
 1. 安装依赖
 ```bat
-pip install mysql-connector-python
+pip install mysql-connector-python boto3
 ```
 
 2. 设置环境变量（示例）
@@ -26,6 +27,13 @@ set REPORT_DB_PORT=4417
 set REPORT_DB_USER=pyuser
 set REPORT_DB_PASSWORD=your_password
 set REPORT_DB_NAME=thd_plant
+set REPORT_DATA_SOURCE=s3
+
+set REPORT_S3_BUCKET=llmdata
+set REPORT_S3_REGION=cn-north-1
+set REPORT_S3_PREFIX=digitaltwin_exports
+set REPORT_S3_ACCESS_KEY_ID=your_aws_access_key
+set REPORT_S3_SECRET_ACCESS_KEY=your_aws_secret_key
 
 set REPORT_LLM_ENABLED=1
 set REPORT_LLM_BASE_URL=https://api.deepseek.com/v1
@@ -73,6 +81,12 @@ pip install mysql-connector-python
 
 export REPORT_HOST=0.0.0.0
 export REPORT_PORT=8003
+export REPORT_DATA_SOURCE=s3
+export REPORT_S3_BUCKET=llmdata
+export REPORT_S3_REGION=cn-north-1
+export REPORT_S3_PREFIX=digitaltwin_exports
+export REPORT_S3_ACCESS_KEY_ID=your_aws_access_key
+export REPORT_S3_SECRET_ACCESS_KEY=your_aws_secret_key
 export REPORT_AUTH_ENABLED=1
 export REPORT_AUTH_USER=admin
 export REPORT_AUTH_PASSWORD=123

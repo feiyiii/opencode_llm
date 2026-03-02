@@ -4,6 +4,7 @@ import math
 import os
 import base64
 import hmac
+import gzip
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,6 +13,10 @@ import zipfile
 from typing import Any
 from urllib import request as urlrequest
 from urllib.parse import parse_qs, urlparse
+try:
+    import boto3  # type: ignore
+except Exception:
+    boto3 = None
 
 BASE_DIR = Path(__file__).resolve().parent
 DT_ROOT = BASE_DIR.parents[3] if len(BASE_DIR.parents) > 3 else BASE_DIR
@@ -245,7 +250,7 @@ def classify_peak(table: str, col: str, avg_v: float, max_v: float, lang: str) -
     }
 
 
-def build_report(report_date: str, lang: str) -> dict[str, Any]:
+def build_report_mysql(report_date: str, lang: str) -> dict[str, Any]:
     report = {
         "date": report_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -418,6 +423,301 @@ def build_report(report_date: str, lang: str) -> dict[str, Any]:
             report["lab"]["note"] = "water_quality table not found"
     finally:
         db.close()
+    return report
+
+
+def _base_report(report_date: str) -> dict[str, Any]:
+    return {
+        "date": report_date,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "db_ok": False,
+        "db_msg": "",
+        "recorder_means": {},
+        "predict_means": {},
+        "warnings": [],
+        "sim_notes": [],
+        "carbon": {
+            "task_count": "N/A",
+            "latest_task": "N/A",
+            "snox_target": "N/A",
+            "snox_target_num": None,
+            "front_current": "N/A",
+            "front_snox": "N/A",
+            "front_snox_num": None,
+            "snox_gap": "N/A",
+            "schedule_next_60m": "N/A",
+        },
+        "carbon_chain": {},
+        "carbon_diagnosis": [],
+        "lab": {
+            "inlet": {},
+            "outlet": {},
+            "pool_lines": [],
+            "alerts": [],
+            "note": "",
+        },
+    }
+
+
+def _try_float(v: Any) -> float | None:
+    if isinstance(v, (int, float)):
+        return to_num(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s or s.lower() in {"nan", "null", "none", "n/a"}:
+            return None
+        try:
+            return to_num(float(s))
+        except Exception:
+            return None
+    return None
+
+
+def _s3_client():
+    if boto3 is None:
+        raise RuntimeError("boto3 not installed")
+    region = os.environ.get("REPORT_S3_REGION", "cn-north-1")
+    endpoint = os.environ.get("REPORT_S3_ENDPOINT_URL", "").strip()
+    if not endpoint and region.startswith("cn-"):
+        endpoint = f"https://s3.{region}.amazonaws.com.cn"
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.environ.get("REPORT_S3_ACCESS_KEY_ID", os.environ.get("AWS_ACCESS_KEY_ID", "")),
+        aws_secret_access_key=os.environ.get("REPORT_S3_SECRET_ACCESS_KEY", os.environ.get("AWS_SECRET_ACCESS_KEY", "")),
+        region_name=region,
+        endpoint_url=endpoint or None,
+    )
+
+
+def _s3_get_json(client, bucket: str, key: str) -> dict[str, Any]:
+    obj = client.get_object(Bucket=bucket, Key=key)
+    return json.loads(obj["Body"].read().decode("utf-8"))
+
+
+def _s3_get_jsonl_rows(client, bucket: str, key: str) -> list[dict[str, Any]]:
+    obj = client.get_object(Bucket=bucket, Key=key)
+    raw = obj["Body"].read()
+    if key.endswith(".gz"):
+        raw = gzip.decompress(raw)
+    rows: list[dict[str, Any]] = []
+    for line in raw.decode("utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+            if isinstance(item, dict):
+                rows.append(item)
+        except Exception:
+            continue
+    return rows
+
+
+def _pick_first(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return rows[0] if rows else None
+
+
+def _load_manifest_with_success_fallback(client, bucket: str, prefix: str, latest_key: str) -> tuple[dict[str, Any], str]:
+    latest = _s3_get_json(client, bucket, latest_key)
+    latest_status = str(latest.get("status", "SUCCESS")).upper()
+    latest_datasets = latest.get("datasets", [])
+    if latest_status == "SUCCESS" and isinstance(latest_datasets, list) and len(latest_datasets) > 0:
+        return latest, latest_key
+
+    run_prefix = f"{prefix}/runs/"
+    manifest_keys: list[str] = []
+    token = None
+    while True:
+        kwargs: dict[str, Any] = {"Bucket": bucket, "Prefix": run_prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = client.list_objects_v2(**kwargs)
+        for obj in page.get("Contents", []):
+            key = obj.get("Key", "")
+            if key.endswith("/manifest.json"):
+                manifest_keys.append(key)
+        if not page.get("IsTruncated"):
+            break
+        token = page.get("NextContinuationToken")
+
+    for key in sorted(manifest_keys, reverse=True):
+        if key == latest_key:
+            continue
+        try:
+            candidate = _s3_get_json(client, bucket, key)
+        except Exception:
+            continue
+        status = str(candidate.get("status", "SUCCESS")).upper()
+        datasets = candidate.get("datasets", [])
+        if status == "SUCCESS" and isinstance(datasets, list) and len(datasets) > 0:
+            return candidate, key
+    return latest, latest_key
+
+
+def _build_report_from_s3(report_date: str, lang: str) -> dict[str, Any]:
+    report = _base_report(report_date)
+    bucket = os.environ.get("REPORT_S3_BUCKET", "llmdata")
+    prefix = os.environ.get("REPORT_S3_PREFIX", "digitaltwin_exports").strip("/")
+    latest_key = os.environ.get("REPORT_S3_LATEST_KEY", f"{prefix}/latest/manifest.json")
+
+    try:
+        client = _s3_client()
+        manifest, used_manifest_key = _load_manifest_with_success_fallback(client, bucket, prefix, latest_key)
+        datasets = {d.get("name"): d for d in manifest.get("datasets", []) if isinstance(d, dict)}
+        data_rows: dict[str, list[dict[str, Any]]] = {}
+        for name in [
+            "sim_recorder",
+            "sim_predict",
+            "carbon_opt_task",
+            "carbon_opt_schedule",
+            "carbon_opt_front",
+            "water_quality",
+            "water_quality_pool",
+        ]:
+            ds = datasets.get(name)
+            if not ds or not ds.get("s3_key"):
+                continue
+            data_rows[name] = _s3_get_jsonl_rows(client, bucket, str(ds["s3_key"]))
+    except Exception as exc:
+        report["db_msg"] = f"s3 read failed: {exc}"
+        report["sim_notes"] = ["S3读取失败，未获取 sim_recorder/sim_predict 数据。"]
+        report["carbon_diagnosis"] = ["S3读取失败，无法读取 AI加碳策略三表，请检查 S3 配置与对象路径。"]
+        return report
+
+    report["db_ok"] = True
+    report["db_msg"] = f"s3 manifest loaded: {used_manifest_key}"
+
+    task_rows = data_rows.get("carbon_opt_task", [])
+    front_rows = data_rows.get("carbon_opt_front", [])
+    sched_rows = data_rows.get("carbon_opt_schedule", [])
+    rec_rows = data_rows.get("sim_recorder", [])
+    pred_rows = data_rows.get("sim_predict", [])
+    wq_rows = data_rows.get("water_quality", [])
+    wqp_rows = data_rows.get("water_quality_pool", [])
+
+    report["carbon"]["task_count"] = len(task_rows) if task_rows else "N/A"
+    task = _pick_first(task_rows)
+    if task:
+        status = task.get("status", "N/A")
+        remark = task.get("remark", "")
+        report["carbon"]["latest_task"] = f"{status} ({remark})".strip()
+        target = _try_float(task.get("snox_limit"))
+        report["carbon"]["snox_target_num"] = target
+        report["carbon"]["snox_target"] = fmt(target)
+
+    front = _pick_first(front_rows)
+    if front:
+        t = front.get("exec_time", front.get("execute_time", "N/A"))
+        mode = front.get("mode", "N/A")
+        carbon = _try_float(front.get("carbon_2_cal"))
+        snox = _try_float(front.get("snox_sim"))
+        report["carbon"]["front_current"] = f"time={t}, mode={mode}, carbon={fmt(carbon)}, snox={fmt(snox)}"
+        report["carbon"]["front_snox_num"] = snox
+        report["carbon"]["front_snox"] = fmt(snox)
+
+    vals = [_try_float(r.get("carbon_2_cal")) for r in sched_rows]
+    vals = [x for x in vals if x is not None]
+    if vals:
+        report["carbon"]["schedule_next_60m"] = (
+            f"points={len(vals)}, avg={fmt(sum(vals)/len(vals))}, min={fmt(min(vals))}, max={fmt(max(vals))}"
+        )
+
+    target = report["carbon"]["snox_target_num"]
+    current = report["carbon"]["front_snox_num"]
+    if target is not None and current is not None:
+        report["carbon"]["snox_gap"] = fmt(current - target)
+
+    report["carbon_chain"] = {
+        "step_1_task": "carbon_opt_task records one optimization/manual task",
+        "step_2_schedule": "carbon_opt_schedule expands strategy into 10-minute execution points",
+        "step_3_front": "carbon_opt_front upserts final effective points (history + forecast)",
+        "step_4_dispatch": "set_carbon_opc reads front effective values for control dispatch",
+        "current_target_snox": report["carbon"]["snox_target"],
+        "current_front_snox": report["carbon"]["front_snox"],
+        "current_gap": report["carbon"]["snox_gap"],
+    }
+
+    for rows, key, table in [
+        (rec_rows, "recorder_means", "sim_recorder"),
+        (pred_rows, "predict_means", "sim_predict"),
+    ]:
+        if not rows:
+            report["sim_notes"].append(f"{table} empty in latest S3 run")
+            continue
+        cols = list(rows[0].keys())
+        targets = [c for c in cols if ("snox" in c.lower() and "cstr" in c.lower()) or ("eff" in c.lower())]
+        if not targets:
+            report["sim_notes"].append(f"{table} no CSTR*_SNOx/EFF* columns matched")
+            continue
+        for c in targets:
+            series = [_try_float(r.get(c)) for r in rows]
+            series = [x for x in series if x is not None]
+            if not series:
+                continue
+            avg_v = sum(series) / len(series)
+            max_v = max(series)
+            report[key][c] = avg_v
+            if avg_v > 0 and max_v / avg_v >= 1.8:
+                report["warnings"].append(classify_peak(table, c, avg_v, max_v, lang))
+
+    wq = _pick_first(wq_rows)
+    if wq:
+        inlet = {}
+        outlet = {}
+        for k, v in wq.items():
+            if not isinstance(k, str):
+                continue
+            num = _try_float(v)
+            if num is None:
+                continue
+            kl = k.lower()
+            if kl.startswith("inlet_"):
+                inlet[k] = num
+            elif kl.startswith("outlet_"):
+                outlet[k] = num
+        report["lab"]["inlet"] = inlet
+        report["lab"]["outlet"] = outlet
+        wqid = wq.get("water_quality_id", wq.get("id"))
+        if wqid is not None:
+            pools = [r for r in wqp_rows if str(r.get("water_quality_id")) == str(wqid)]
+            lines = []
+            alerts = []
+            for p in pools:
+                key = p.get("key")
+                mlss = _try_float(p.get("mlss"))
+                mlvss = _try_float(p.get("mlvss"))
+                lines.append({"key": key, "mlss": mlss, "mlvss": mlvss})
+                if mlss is not None and (mlss < 500 or mlss > 8000):
+                    alerts.append(f"line{key} mlss abnormal: {fmt(mlss)}")
+                if mlvss is not None and (mlvss < 300 or mlvss > 7000):
+                    alerts.append(f"line{key} mlvss abnormal: {fmt(mlvss)}")
+                if mlss is not None and mlvss is not None and mlss > 0:
+                    ratio = mlvss / mlss
+                    if ratio < 0.4 or ratio > 0.9:
+                        alerts.append(f"line{key} mlvss/mlss ratio unusual: {fmt(ratio, 2)}")
+            report["lab"]["pool_lines"] = lines
+            report["lab"]["alerts"] = alerts
+    else:
+        report["lab"]["note"] = "water_quality empty in latest S3 run"
+
+    report["carbon_diagnosis"] = build_carbon_diagnosis(report["carbon"], lang)
+    return report
+
+
+def build_report(report_date: str, lang: str) -> dict[str, Any]:
+    source = os.environ.get("REPORT_DATA_SOURCE", "s3").strip().lower()
+    if source == "mysql":
+        return build_report_mysql(report_date, lang)
+
+    report = _build_report_from_s3(report_date, lang)
+    if report.get("db_ok"):
+        return report
+
+    if os.environ.get("REPORT_S3_FALLBACK_DB", "1") == "1":
+        fallback = build_report_mysql(report_date, lang)
+        fallback["sim_notes"] = report.get("sim_notes", []) + fallback.get("sim_notes", [])
+        fallback["db_msg"] = f"{report.get('db_msg', '')}; fallback=mysql"
+        return fallback
     return report
 
 
