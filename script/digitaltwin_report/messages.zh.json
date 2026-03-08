@@ -1,0 +1,22 @@
+{
+  "loading_title": "报告生成中",
+  "loading_steps": [
+    "正在读取 S3 最新数据包...",
+    "正在连接 LLM 引擎（DeepSeek/GLM）...",
+    "正在生成 AI 工艺分析，请稍候...",
+    "正在整理报告页面，即将展示..."
+  ],
+  "hint_slow": "若超过 2 分钟，请检查网络和模型接口状态。",
+  "timeout_title": "报告生成超过 5 分钟，任务可能阻塞。",
+  "timeout_items": [
+    "检查 LLM API 是否可用，是否超时或配额不足。",
+    "检查 S3 latest/manifest 是否存在且可读取。",
+    "检查 report_server 进程或 Docker/进程管理器状态。",
+    "必要时切换模型后重试，或先生成基础报告。"
+  ],
+  "diag_button": "手动诊断",
+  "diag_loading": "正在获取诊断信息...",
+  "diag_error_prefix": "诊断失败：",
+  "error_prefix": "报告生成失败：",
+  "diag_label": "运维排查建议"
+}

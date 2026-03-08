@@ -1,0 +1,22 @@
+{
+  "loading_title": "Generating Report",
+  "loading_steps": [
+    "Reading latest S3 datasets...",
+    "Connecting LLM provider (DeepSeek/GLM)...",
+    "Generating AI process analysis, please wait...",
+    "Preparing report rendering..."
+  ],
+  "hint_slow": "If this takes over 2 minutes, check network and model API status.",
+  "timeout_title": "Generation exceeded 5 minutes; the task may be blocked.",
+  "timeout_items": [
+    "Check LLM API availability, timeout and quota.",
+    "Check whether S3 latest/manifest exists and is readable.",
+    "Check report_server process or Docker/process manager status.",
+    "Try switching model, or generate base report first."
+  ],
+  "diag_button": "Run Diagnostics",
+  "diag_loading": "Loading diagnostics...",
+  "diag_error_prefix": "Diagnostics failed: ",
+  "error_prefix": "Report generation failed: ",
+  "diag_label": "Ops Checklist"
+}

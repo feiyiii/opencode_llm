@@ -62,6 +62,7 @@ start_report_server.bat
 3. 峰值预警：
 - 规则：`daily_max >= 1.8 * daily_mean`
 - 输出：等级、原因、工艺诊断建议
+- 英文切换说明：英文页基于中文分析结果做翻译，不会重新执行整份分析推理。
 
 ## 规则与上下文如何生效
 - 服务每次调用 LLM 时会自动读取：
@@ -73,6 +74,17 @@ start_report_server.bat
 ## EC2 最小部署（推荐）
 仅复制以下目录即可，不需要整个 opencode：
 - `script/digitaltwin_report`
+
+### 用 JSON 统一配置（推荐）
+1. 复制 `report_config.json.example` 为 `report_config.json`
+2. 填入你的真实 key 和路径
+3. 直接启动：`python report_server.py`
+4. `REPORT_S3_DOCS_ENABLED=1` 时，会自动从 `s3://llmdata/docs/` 拉取 `.md/.txt/.docx` 作为 LLM 额外上下文
+
+可选：如果配置文件不在当前目录，设置：
+```bash
+export REPORT_CONFIG_JSON=/your/path/report_config.json
+```
 
 Linux 启动示例：
 ```bash

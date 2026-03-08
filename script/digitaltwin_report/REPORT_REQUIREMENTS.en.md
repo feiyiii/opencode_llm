@@ -29,3 +29,10 @@ Generate a structured, actionable report from the JSON input. Avoid generic word
 - explain likely causes (empty day data, field mismatch, collection lag)
 - still provide diagnosis using `carbon_opt_task / carbon_opt_schedule / carbon_opt_front`
 - Keep output concise and operational.
+
+## Engineering Constraints (Mandatory)
+- English switch is translation-only behavior and must not trigger a second full reasoning pass.
+- Full LLM regeneration is allowed only when provider changes or when user clicks `Update AI Analysis`.
+- Do not claim large-scale missing data unless explicit missing facts are present.
+- Sensor Validate follows Dash rule: drift should be represented by segmented clean_data coloring (avoid extra drift_prob/drift_degree trend lines unless explicitly requested).
+- After changes, run minimum checks: `py_compile` + smoke calls for `/api/report` and `/api/diagnostics`.
