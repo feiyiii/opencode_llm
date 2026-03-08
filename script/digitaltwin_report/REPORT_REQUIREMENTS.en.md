@@ -35,4 +35,6 @@ Generate a structured, actionable report from the JSON input. Avoid generic word
 - Full LLM regeneration is allowed only when provider changes or when user clicks `Update AI Analysis`.
 - Do not claim large-scale missing data unless explicit missing facts are present.
 - Sensor Validate follows Dash rule: drift should be represented by segmented clean_data coloring (avoid extra drift_prob/drift_degree trend lines unless explicitly requested).
+- Rule criteria hints must use a small `i` icon with `Notes` next to the specific alert sentence, not attached to the main section heading.
+- Analysis rendering must support real Markdown hierarchy (headings, ordered/unordered lists, bold/italic) and must not display raw `**`/`*` markers.
 - After changes, run minimum checks: `py_compile` + smoke calls for `/api/report` and `/api/diagnostics`.

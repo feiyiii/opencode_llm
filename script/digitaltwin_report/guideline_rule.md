@@ -7,6 +7,7 @@
 ## 2) LLM & Language Switching Rules
 - Chinese report is the primary generation result.
 - `English` switch must be translation-only behavior.
+- English translation must use local translator logic (no extra remote LLM API call).
 - English switch must NOT trigger a second full report reasoning pass.
 - English switch should avoid long blocking time.
 - If provider is switched (`DeepSeek`/`GLM`), allow regeneration (with confirmation).
@@ -44,6 +45,8 @@
 - Avoid accidental heading promotion for long narrative lines.
 - `AI智慧分析综述` uses a subtle light-blue summary container.
 - Highlight color (orange) is only for strongest key risk lines.
+- Rule thresholds should be shown as inline `i` helper beside the exact abnormal sentence, labeled as `补充说明/Notes`.
+- LLM text must be rendered as structured Markdown-like HTML (real headings/lists/strong/emphasis), not raw marker text.
 
 ## 7) RAG/Memory Rules
 - RAG memory is enabled from S3 memory index/runs.

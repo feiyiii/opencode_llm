@@ -1541,30 +1541,48 @@ def _expand_llm_output(base: str, key: str, model: str, raw_text: str, lang: str
     return _llm_request(base, key, body, timeout_sec)
 
 
-def _translate_text_with_llm(text: str, provider: str, target_lang: str = "en") -> str:
-    profile = llm_profile(provider)
-    key = profile["key"]
-    if not key:
-        return text
-    base = profile["base"]
-    model = profile["model"]
-    prompt = (
-        "Translate the following Chinese technical report text to concise professional English. Preserve structure and bullets. Do not add new facts.\n\n"
-        + text
-    ) if target_lang == "en" else text
-    body = {
-        "model": model,
-        "temperature": 0.0,
-        "max_tokens": llm_max_tokens(),
-        "messages": [
-            {"role": "system", "content": "You are a precise technical translator."},
-            {"role": "user", "content": prompt},
-        ],
+def _translate_text_local(text: str, target_lang: str = "en") -> str:
+    src = (text or "").strip()
+    if not src or target_lang != "en":
+        return src
+    line_map = {
+        "总评": "Summary",
+        "当前运行状态": "Current Running Status",
+        "预测简述": "Prediction Brief",
+        "预警原因与工艺诊断": "Warning Causes & Process Diagnosis",
+        "操作建议": "Actions",
+        "AI加碳策略专项分析": "AI Carbon Strategy Special Analysis",
+        "AI加碳策略": "AI Carbon Strategy",
     }
-    try:
-        return _llm_request(base, key, body, max(30, llm_timeout_seconds() // 2))
-    except Exception:
-        return text
+    token_map = [
+        ("【重点】", "[Key] "),
+        ("风险", "risk"),
+        ("建议", "recommendation"),
+        ("现状", "current status"),
+        ("未来", "future"),
+        ("趋势", "trend"),
+        ("增碳", "increase carbon"),
+        ("降碳", "decrease carbon"),
+        ("保持", "hold"),
+        ("预警", "warning"),
+        ("工艺诊断", "process diagnosis"),
+        ("原因", "cause"),
+        ("排查", "check"),
+        ("结果", "result"),
+        ("缺失", "missing"),
+    ]
+    out: list[str] = []
+    for raw in src.splitlines():
+        line = raw.rstrip()
+        key = line.strip().replace("*", "")
+        if key in line_map:
+            out.append(line_map[key])
+            continue
+        t = line
+        for a, b in token_map:
+            t = t.replace(a, b)
+        out.append(t)
+    return "\n".join(out)
 
 
 def get_analysis_for_lang(
@@ -1622,7 +1640,7 @@ def get_analysis_for_lang(
 
     if en_key not in ANALYSIS_CACHE:
         try:
-            ANALYSIS_CACHE[en_key] = _translate_text_with_llm(ANALYSIS_CACHE[zh_key], provider, "en")
+            ANALYSIS_CACHE[en_key] = _translate_text_local(ANALYSIS_CACHE[zh_key], "en")
             LAST_GOOD_ANALYSIS[stale_key_en] = ANALYSIS_CACHE[en_key]
         except Exception:
             if backup_en:
@@ -2361,47 +2379,95 @@ def _analysis_to_html(text: str, lang: str) -> str:
     t = _sanitize_analysis_text(text or "", lang)
     if not t:
         return ""
-    out: list[str] = []
-    heading_words = ("总评", "当前运行状态", "预测简述", "预警原因与工艺诊断", "操作建议", "AI加碳策略", "风险", "结论")
+    def _inline_md(s: str) -> str:
+        x = html.escape(s)
+        x = re.sub(r"`([^`]+)`", r"<code>\1</code>", x)
+        x = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", x)
+        x = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", x)
+        x = x.replace("【重点】", '<span class="ai-tag">重点</span> ')
+        return x
+
+    out: list[str] = ['<div class="ai-md">']
+    in_ul = False
+    in_ol = False
+
+    def _close_lists() -> None:
+        nonlocal in_ul, in_ol
+        if in_ul:
+            out.append("</ul>")
+            in_ul = False
+        if in_ol:
+            out.append("</ol>")
+            in_ol = False
+
+    heading_words = ("当前运行状态", "预测简述", "预警原因与工艺诊断", "操作建议", "AI加碳策略", "风险", "结论")
     for raw in t.splitlines():
-        line = raw.strip()
-        if not line:
+        line = raw.rstrip()
+        if not line.strip():
+            _close_lists()
             continue
-        norm = line.replace("*", "").strip()
+        s = line.strip()
+        norm = s.replace("*", "").strip()
         line_no_hash = re.sub(r"^#+\s*", "", norm).strip()
-        # If LLM outputs "总评: xxx" (with or without markdown heading) in one line,
-        # hide the "总评" title and keep only content as normal paragraph.
-        if line_no_hash.startswith("总评") and len(line_no_hash) > 2:
+
+        if line_no_hash.startswith("总评"):
             m = re.match(r"^总评\s*[:：]?\s*(.*)$", line_no_hash)
-            if m:
-                tail = m.group(1).strip()
-                if tail:
-                    tail_esc = html.escape(tail)
-                    if "【重点】" in tail:
-                        tail_esc = tail_esc.replace("【重点】", "<span class=\"ai-tag\">重点</span> ")
-                        out.append(f'<div class="ai-line ai-urgent">{tail_esc}</div>')
-                    else:
-                        out.append(f'<div class="ai-line">{tail_esc}</div>')
-                continue
-        if line_no_hash == "总评":
+            if m and m.group(1).strip():
+                _close_lists()
+                tail = _inline_md(m.group(1).strip())
+                cls = "ai-line ai-urgent" if "ai-tag" in tail else "ai-line"
+                out.append(f'<p class="{cls}">{tail}</p>')
             continue
-        esc = html.escape(line)
-        heading_set = {x for x in heading_words if x != "总评"}
-        # Only pure section-title lines should be treated as heading.
-        # Avoid promoting long narrative sentences that just start with the same words.
-        is_heading = line.startswith("#") or (line_no_hash in heading_set) or bool(re.match(r"^(当前运行状态|预测简述|预警原因与工艺诊断|操作建议|AI加碳策略|风险|结论)\s*[:：]?$", line_no_hash))
-        is_bullet = line.startswith(("-", "•", "1.", "2.", "3.", "4.", "5."))
-        # Only explicit strongest highlights should be orange.
-        is_urgent = "【重点】" in line
-        cls = "ai-line"
-        if is_heading:
-            cls += " ai-heading"
-        elif is_bullet:
-            cls += " ai-bullet"
-        if is_urgent:
-            cls += " ai-urgent"
-            esc = esc.replace("【重点】", "<span class=\"ai-tag\">重点</span> ")
-        out.append(f"<div class=\"{cls}\">{esc}</div>")
+
+        m_h = re.match(r"^(#{1,6})\s+(.*)$", s)
+        if m_h:
+            _close_lists()
+            level = min(max(len(m_h.group(1)), 2), 4)
+            body = _inline_md(m_h.group(2).strip())
+            out.append(f'<h{level} class="ai-heading">{body}</h{level}>')
+            continue
+
+        is_named_heading = line_no_hash in heading_words or bool(
+            re.match(r"^(当前运行状态|预测简述|预警原因与工艺诊断|操作建议|AI加碳策略|风险|结论)\s*[:：]?$", line_no_hash)
+        )
+        if is_named_heading:
+            _close_lists()
+            out.append(f'<h4 class="ai-heading">{_inline_md(line_no_hash)}</h4>')
+            continue
+
+        m_ol = re.match(r"^\s*(\d+)\.\s+(.*)$", line)
+        if m_ol:
+            if in_ul:
+                out.append("</ul>")
+                in_ul = False
+            if not in_ol:
+                out.append('<ol class="ai-list ai-ol">')
+                in_ol = True
+            body = _inline_md(m_ol.group(2).strip())
+            li_cls = ' class="ai-urgent"' if "ai-tag" in body else ""
+            out.append(f"<li{li_cls}>{body}</li>")
+            continue
+
+        m_ul = re.match(r"^\s*[-*•]\s+(.*)$", line)
+        if m_ul:
+            if in_ol:
+                out.append("</ol>")
+                in_ol = False
+            if not in_ul:
+                out.append('<ul class="ai-list ai-ul">')
+                in_ul = True
+            body = _inline_md(m_ul.group(1).strip())
+            li_cls = ' class="ai-urgent"' if "ai-tag" in body else ""
+            out.append(f"<li{li_cls}>{body}</li>")
+            continue
+
+        _close_lists()
+        body = _inline_md(s)
+        p_cls = "ai-line ai-urgent" if "ai-tag" in body else "ai-line"
+        out.append(f'<p class="{p_cls}">{body}</p>')
+
+    _close_lists()
+    out.append("</div>")
     return "".join(out)
 
 
@@ -2424,7 +2490,7 @@ def render(report: dict[str, Any], lang: str, analysis_text: str, mode: str = "f
     profile = llm_profile(str(provider))
     analysis_text = _sanitize_analysis_text(analysis_text, lang)
     carbon_analysis = _extract_carbon_analysis_section(analysis_text)
-    carbon_analysis_html = html.escape(carbon_analysis or "").replace("\n", "<br/>")
+    carbon_analysis_html = _analysis_to_html(carbon_analysis or "", lang)
     analysis = _analysis_to_html(analysis_text, lang)
     model_line = f"{profile['model']} @ {profile['base']}"
     zh_url = f"/report?date={report['date']}&lang=zh&provider={provider}&mode={mode}"
@@ -2447,38 +2513,70 @@ def render(report: dict[str, Any], lang: str, analysis_text: str, mode: str = "f
     lab_insight_text = "".join(f"<li>{html.escape(str(x))}</li>" for x in lab_insights)
     hist_base = report.get("history_baseline", []) if isinstance(report.get("history_baseline", []), list) else []
     hist_base_html = "".join(f"<li>{html.escape(str(x))}</li>" for x in hist_base)
-    lab_alert_text = "".join(f"<li>{html.escape(x)}</li>" for x in lab_alerts) or ("<li>无明显异常</li>" if zh else "<li>No obvious abnormality.</li>")
+    lab_note_title = "补充说明" if zh else "Notes"
+    lab_note_text = (
+        "MLSS abnormal 当值 < 500 或 > 8000；MLVSS abnormal 当值 < 300 或 > 7000；MLVSS/MLSS ratio unusual 当比值 < 0.40 或 > 0.90。"
+        if zh
+        else "MLSS abnormal if value < 500 or > 8000; MLVSS abnormal if value < 300 or > 7000; MLVSS/MLSS ratio unusual if ratio < 0.40 or > 0.90."
+    )
+    lab_alert_text = ""
+    for x in lab_alerts:
+        msg = str(x)
+        needs_tip = ("abnormal" in msg.lower()) or ("unusual" in msg.lower())
+        if needs_tip:
+            lab_alert_text += (
+                f"<li>{html.escape(msg)}"
+                f"<span class=\"info-wrap\" style=\"margin-left:6px\">"
+                f"<button type=\"button\" class=\"info-btn mini-info\">i</button>"
+                f"<div class=\"info-pop\"><b>{lab_note_title}</b><br/>{html.escape(lab_note_text)}</div>"
+                f"</span></li>"
+            )
+        else:
+            lab_alert_text += f"<li>{html.escape(msg)}</li>"
+    if not lab_alert_text:
+        lab_alert_text = "<li>无明显异常</li>" if zh else "<li>No obvious abnormality.</li>"
     if lab_note:
         lab_alert_text += f"<li>{html.escape(lab_note)}</li>"
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><title>{title}</title>
 <style>
-body{{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;margin:0;color:#1f2937;background:
-linear-gradient(rgba(10,18,28,.78), rgba(10,18,28,.78)),
+body{{font-family:"IBM Plex Sans","PingFang SC","Microsoft YaHei",sans-serif;margin:0;color:#1f2937;background:
+radial-gradient(circle at 15% 20%, rgba(55,117,182,.18), transparent 35%),
+radial-gradient(circle at 80% 10%, rgba(42,154,212,.12), transparent 32%),
+linear-gradient(rgba(9,17,27,.82), rgba(9,17,27,.82)),
 url('/static/digitaltwin.png') center/cover fixed no-repeat;}}
-.page{{max-width:1200px;margin:0 auto;padding:18px}}
-.topbar{{position:relative;overflow:hidden;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:rgba(13,27,42,.72);backdrop-filter:blur(6px);border:1px solid rgba(145,180,220,.35);border-radius:14px;padding:14px 16px;margin-bottom:12px;color:#e6edf5}}
+.page{{max-width:min(1680px,96vw);margin:0 auto;padding:18px}}
+.topbar{{position:relative;overflow:hidden;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:rgba(10,24,40,.78);backdrop-filter:blur(8px);border:1px solid rgba(126,179,232,.42);border-radius:14px;padding:14px 16px;margin-bottom:12px;color:#e6edf5;box-shadow:0 0 0 1px rgba(68,129,192,.18) inset, 0 12px 30px rgba(0,0,0,.22)}}
 .topbar::before{{content:"";position:absolute;inset:0;background:url('/static/plantwin_logo.png') center/contain no-repeat;opacity:.04;pointer-events:none}}
 .topbar > *{{position:relative;z-index:1}}
 .title{{font-size:22px;font-weight:700;letter-spacing:.2px}}
 .meta{{font-size:12px;color:#b7c8da}}
 .actions{{display:flex;gap:8px;flex-wrap:wrap}}
-.lang{{display:inline-block;padding:5px 12px;border:1px solid #77a8df;border-radius:999px;text-decoration:none;color:#d9ecff;background:rgba(24,58,91,.45)}}
+.lang{{display:inline-block;padding:5px 12px;border:1px solid #77a8df;border-radius:999px;text-decoration:none;color:#d9ecff;background:rgba(24,58,91,.45);box-shadow:0 0 12px rgba(80,147,214,.2)}}
 .tabs{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}}
-.tab-btn{{padding:8px 14px;border:1px solid #9dc4e8;border-radius:10px;background:rgba(245,250,255,.92);color:#0f4c81;cursor:pointer;font-weight:600}}
-.tab-btn.active{{background:#cfe8ff;border-color:#6ea8db}}
+.tab-btn{{padding:8px 14px;border:1px solid #9dc4e8;border-radius:10px;background:linear-gradient(180deg, rgba(244,250,255,.95), rgba(228,241,255,.95));color:#0f4c81;cursor:pointer;font-weight:600}}
+.tab-btn.active{{background:linear-gradient(180deg,#d9efff,#bfe0ff);border-color:#58a0db;box-shadow:0 0 0 1px rgba(68,129,192,.25) inset, 0 6px 14px rgba(68,129,192,.22)}}
 .panel{{display:none}}
 .panel.active{{display:block}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:10px}}
+.overview-grid{{display:grid;grid-template-columns:1.2fr 1fr;gap:10px}}
 .diag-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}}
-.card{{background:rgba(248,251,255,.94);border:1px solid #b8d0e8;border-radius:12px;padding:14px;box-shadow:0 6px 24px rgba(0,0,0,.14);font-size:14px;line-height:1.62}}
+.card{{background:linear-gradient(180deg, rgba(248,251,255,.96), rgba(241,248,255,.94));border:1px solid #b8d0e8;border-radius:12px;padding:14px;box-shadow:0 10px 28px rgba(0,0,0,.16), 0 0 0 1px rgba(142,188,230,.2) inset;font-size:14px;line-height:1.62}}
 h2{{margin:0 0 8px 0;color:#0f4c81;font-size:19px}}
 .muted{{color:#496381;font-size:13px}} ul{{margin:0 0 0 18px;padding:0}}
-.ai-summary-box{{background:rgba(214,236,255,.56);border:1px solid #b8d8f6;border-radius:10px;padding:10px 12px}}
+.ai-summary-box{{background:
+linear-gradient(180deg, rgba(228,241,255,.74), rgba(216,235,255,.62));
+border:1px solid #9cc6ee;border-radius:10px;padding:10px 12px;position:relative}}
+.ai-summary-box::before{{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg, transparent, transparent 21px, rgba(66,120,173,.06) 22px);pointer-events:none;border-radius:10px}}
 .plot-box{{height:290px}}
-.ai-line{{line-height:1.68;font-size:14px;margin:0 0 6px 0;color:#1f2937}}
-.ai-heading{{font-size:18px;font-weight:700;color:#0f4c81;margin-top:6px}}
-.ai-bullet{{padding-left:8px;border-left:2px solid #c8dbf2}}
+.ai-md{{position:relative;z-index:1}}
+.ai-line{{line-height:1.68;font-size:14px;margin:0 0 8px 0;color:#1f2937}}
+.ai-heading{{font-size:18px;font-weight:700;color:#0f4c81;margin:12px 0 8px 0;padding-top:4px;border-top:1px solid rgba(112,157,201,.35)}}
+.ai-list{{margin:0 0 10px 22px;padding:0}}
+.ai-list li{{margin:0 0 8px 0;line-height:1.7}}
+.ai-md strong{{font-weight:700}}
+.ai-md em{{font-style:italic}}
+.ai-md code{{background:#e8f1fb;border:1px solid #c7dbef;padding:1px 4px;border-radius:5px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;font-size:12px}}
 .ai-urgent{{color:#ff9f43;font-weight:700}}
 .ai-tag{{display:inline-block;font-size:12px;padding:1px 6px;border-radius:999px;background:#ff9f43;color:#0e233b;margin-right:6px}}
 .footer{{margin-top:14px;text-align:center;color:#c5d6ea;font-size:12px}}
@@ -2486,7 +2584,11 @@ h2{{margin:0 0 8px 0;color:#0f4c81;font-size:19px}}
 .sensor-frame{{width:100%;height:760px;border:1px solid #2b4f7b;border-radius:12px;background:#0d1827}}
 .switch-mask{{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(4,10,18,.48);z-index:9999}}
 .switch-box{{background:#0f2137;border:1px solid #3c6796;border-radius:12px;padding:14px 18px;color:#d8ecff;box-shadow:0 10px 30px rgba(0,0,0,.25)}}
-@media (max-width: 980px){{ .diag-grid{{grid-template-columns:1fr}} }}
+.info-wrap{{position:relative;display:inline-block;margin-left:8px}}
+.info-btn{{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1px solid #7aa8d6;color:#0f4c81;background:#e8f2ff;cursor:pointer;font-size:12px;font-weight:700;line-height:1}}
+.info-pop{{display:none;position:absolute;left:0;top:24px;z-index:50;min-width:340px;max-width:520px;background:#f7fbff;border:1px solid #b8d0e8;border-radius:10px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18);color:#1f2937;font-size:13px;line-height:1.5}}
+.info-wrap.open .info-pop{{display:block}}
+@media (max-width: 980px){{ .diag-grid{{grid-template-columns:1fr}} .overview-grid{{grid-template-columns:1fr}} }}
 </style></head><body>
 <div class="page">
 <div class="topbar">
@@ -2509,18 +2611,22 @@ h2{{margin:0 0 8px 0;color:#0f4c81;font-size:19px}}
   <button class="tab-btn" data-tab="tab-sensor">{'Sensor Validate' if zh else 'Sensor Validate'}</button>
 </div>
 <div id="tab-ai-overview" class="panel active">
-<div class="grid">
+<div class="overview-grid">
 <div class="card"><h2>{'运行概况（实验室）' if zh else 'Lab Running Overview'}</h2>
 <div>inlet_*: {html.escape(inlet_text)}</div>
 <div>outlet_*: {html.escape(outlet_text)}</div>
 <div>pool(mlss/mlvss): {html.escape(pool_text)}</div>
 <div class="muted" style="margin-top:6px">{'工艺见解' if zh else 'Process Insights'}</div>
 <ul>{lab_insight_text or ('<li>暂无</li>' if zh else '<li>N/A</li>')}</ul>
-<ul>{lab_alert_text}</ul></div>
-<div class="card"><h2>{'实验室趋势图（进水）' if zh else 'Lab Trend (Inlet)'}</h2><div id="labInletPlot" class="plot-box"></div></div>
-<div class="card"><h2>{'实验室趋势图（出水）' if zh else 'Lab Trend (Outlet)'}</h2><div id="labOutletPlot" class="plot-box"></div></div>
+<ul>{lab_alert_text}</ul>
+<div class="muted" style="margin-top:8px">{'实验室趋势图（进水）' if zh else 'Lab Trend (Inlet)'}</div>
+<div id="labInletPlot" class="plot-box"></div>
+<div class="muted" style="margin-top:8px">{'实验室趋势图（出水）' if zh else 'Lab Trend (Outlet)'}</div>
+<div id="labOutletPlot" class="plot-box"></div>
+<div class="muted" style="margin-top:8px">{'历史对比基线' if zh else 'Historical Baseline'}</div>
+<ul>{hist_base_html or ('<li>暂无历史对比基线</li>' if zh else '<li>No baseline</li>')}</ul>
+</div>
 <div class="card"><h2>{'AI智慧分析综述' if zh else 'AI Insight Summary'}</h2><div class="ai-summary-box">{analysis}</div></div>
-<div class="card"><h2>{'历史对比基线' if zh else 'Historical Baseline'}</h2><ul>{hist_base_html or ('<li>暂无历史对比基线</li>' if zh else '<li>No baseline</li>')}</ul></div>
 </div>
 </div>
 
@@ -2643,6 +2749,21 @@ function makeLabPlot(divId, side){{
 }}
 makeLabPlot('labInletPlot', 'inlet');
 makeLabPlot('labOutletPlot', 'outlet');
+
+document.querySelectorAll('.mini-info').forEach((btn) => {{
+  btn.addEventListener('click', (e) => {{
+    e.stopPropagation();
+    const wrap = btn.closest('.info-wrap');
+    if (!wrap) return;
+    document.querySelectorAll('.info-wrap.open').forEach((w) => {{
+      if (w !== wrap) w.classList.remove('open');
+    }});
+    wrap.classList.toggle('open');
+  }});
+}});
+document.addEventListener('click', () => {{
+  document.querySelectorAll('.info-wrap.open').forEach((w) => w.classList.remove('open'));
+}});
 </script>
 </body></html>"""
 

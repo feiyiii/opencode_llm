@@ -55,4 +55,6 @@
 - 仅在“切换 Provider”或“点击更新AI分析”时允许重新调用 LLM。
 - 若未检测到明确缺失事实，不得输出“运行数据缺失/大面积缺失”。
 - Sensor Validate 视图遵循 Dash 规则：漂移由 clean_data 分段着色表达，非必要不额外画 drift_prob/drift_degree 线。
+- 异常判定规则提示采用“小 i 图标 + 补充说明”形式，放在对应异常语句旁，不放在大标题后。
+- 分析渲染必须支持真实 Markdown 层级（标题、编号列表、无序列表、粗体/斜体），不得直接暴露原始 `**`、`*` 标记。
 - 修改后必须执行最小验证：`py_compile` + `/api/report` + `/api/diagnostics` 冒烟检查。
