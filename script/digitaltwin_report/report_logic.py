@@ -2546,8 +2546,8 @@ radial-gradient(circle at 80% 10%, rgba(42,154,212,.12), transparent 32%),
 linear-gradient(rgba(9,17,27,.82), rgba(9,17,27,.82)),
 url('/static/digitaltwin.png') center/cover fixed no-repeat;}}
 .page{{max-width:min(1680px,96vw);margin:0 auto;padding:18px}}
-.topbar{{position:relative;overflow:hidden;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:rgba(10,24,40,.78);backdrop-filter:blur(8px);border:1px solid rgba(126,179,232,.42);border-radius:14px;padding:14px 16px;margin-bottom:12px;color:#e6edf5;box-shadow:0 0 0 1px rgba(68,129,192,.18) inset, 0 12px 30px rgba(0,0,0,.22)}}
-.topbar::before{{content:"";position:absolute;inset:0;background:url('/static/plantwin_logo.png') center/contain no-repeat;opacity:.04;pointer-events:none}}
+.topbar{{position:relative;overflow:hidden;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;background:linear-gradient(135deg, rgba(8,24,44,.86), rgba(15,40,68,.78));backdrop-filter:blur(8px);border:1px solid rgba(126,179,232,.5);border-radius:14px;padding:14px 16px;margin-bottom:12px;color:#e6edf5;box-shadow:0 0 0 1px rgba(68,129,192,.22) inset, 0 12px 30px rgba(0,0,0,.22), 0 0 24px rgba(76,144,210,.18)}}
+.topbar::before{{content:"";position:absolute;inset:0;background:url('/static/plantwin_watermark.svg') center/92% no-repeat;opacity:.2;pointer-events:none}}
 .topbar > *{{position:relative;z-index:1}}
 .title{{font-size:22px;font-weight:700;letter-spacing:.2px}}
 .meta{{font-size:12px;color:#b7c8da}}

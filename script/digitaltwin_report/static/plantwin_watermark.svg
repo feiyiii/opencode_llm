@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="360" viewBox="0 0 1600 360" fill="none">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#9ED6FF" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#5AA8E8" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#C8E7FF" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#84C6F4" stop-opacity="0.25"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="360" fill="transparent"/>
+
+  <g opacity="0.35" stroke="url(#g1)" stroke-width="1.4">
+    <path d="M80 256 C220 180, 340 300, 500 236 C650 176, 760 290, 930 220 C1080 164, 1210 282, 1510 206"/>
+    <path d="M120 290 C250 224, 372 330, 540 266 C690 208, 818 318, 980 254 C1130 196, 1260 306, 1540 238"/>
+  </g>
+
+  <g opacity="0.32" stroke="url(#g2)" stroke-width="1.2">
+    <polyline points="250,86 310,54 370,86 370,150 310,182 250,150 250,86"/>
+    <polyline points="386,86 446,54 506,86 506,150 446,182 386,150 386,86"/>
+    <polyline points="522,86 582,54 642,86 642,150 582,182 522,150 522,86"/>
+    <line x1="370" y1="86" x2="386" y2="86"/>
+    <line x1="506" y1="86" x2="522" y2="86"/>
+  </g>
+
+  <g opacity="0.5" stroke="#BFE4FF" stroke-width="2" fill="none">
+    <path d="M120 126 C170 100, 220 152, 270 126 C320 100, 370 152, 420 126"/>
+    <path d="M120 152 C170 126, 220 178, 270 152 C320 126, 370 178, 420 152"/>
+  </g>
+
+  <g opacity="0.4" fill="#D6EEFF">
+    <text x="690" y="120" font-size="62" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" letter-spacing="8">DIGITAL TWIN</text>
+    <text x="692" y="170" font-size="24" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" letter-spacing="4">WATER PROCESS INTELLIGENCE</text>
+  </g>
+</svg>
